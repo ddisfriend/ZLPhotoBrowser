@@ -340,6 +340,8 @@ class ViewController: UIViewController {
             }
         }
         
+        vc.delegate = self
+        
         vc.doneBlock = { datas in
             debugPrint(datas)
         }
@@ -353,6 +355,10 @@ class ViewController: UIViewController {
     }
     
     @objc func showCamera() {
+        // To enable tap-to-record you can also use tapToRecordVideo flag in camera config, for example:
+        // ZLPhotoConfiguration.default().cameraConfiguration = ZLPhotoConfiguration.default().cameraConfiguration
+        //  .tapToRecordVideo(true)
+        
         let camera = ZLCustomCamera()
         camera.takeDoneBlock = { [weak self] image, videoUrl in
             self?.save(image: image, videoUrl: videoUrl)
@@ -463,5 +469,19 @@ extension ViewController: UICollectionViewDataSource, UICollectionViewDelegateFl
         }
         
         ac.previewAssets(sender: self, assets: selectedAssets, index: indexPath.row, isOriginal: isOriginal, showBottomViewAndSelectBtn: true)
+    }
+}
+
+extension ViewController: ZLImagePreviewControllerDelegate {
+    func imagePreviewController(_ controller: ZLImagePreviewController, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+//        debugPrint("---- willDisplay: \(cell) indexPath: \(indexPath)")
+    }
+    
+    func imagePreviewController(_ controller: ZLImagePreviewController, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+//        debugPrint("---- didEndDisplaying: \(cell) indexPath: \(indexPath)")
+    }
+    
+    func imagePreviewController(_ controller: ZLImagePreviewController, didScroll collectionView: UICollectionView) {
+//        debugPrint("---- didScroll: \(collectionView)")
     }
 }

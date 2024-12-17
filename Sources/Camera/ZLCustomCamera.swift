@@ -238,6 +238,10 @@ open class ZLCustomCamera: UIViewController {
         }
     }
     
+    private var shouldUseTapToRecord: Bool {
+        cameraConfig.tapToRecordVideo && !cameraConfig.allowTakePhoto
+    }
+    
     private lazy var cameraConfig = ZLPhotoConfiguration.default().cameraConfiguration
     
     // 仅支持竖屏
@@ -382,6 +386,7 @@ open class ZLCustomCamera: UIViewController {
         previewLayer?.frame = previewFrame
         recordVideoPlayerLayer?.frame = previewFrame
         takedImageView.frame = previewFrame
+        cameraConfig.overlayView?.frame = previewFrame // Layout custom overlay view.
         
         dismissBtn.frame = CGRect(x: 20, y: 60, width: 30, height: 30)
         retakeBtn.frame = CGRect(x: 20, y: 60, width: 28, height: 28)
@@ -427,6 +432,10 @@ open class ZLCustomCamera: UIViewController {
         view.addSubview(tipsLabel)
         view.addSubview(bottomView)
         
+        if let overlayView = cameraConfig.overlayView {
+            view.addSubview(overlayView)  // Add custom overlay view.
+        }
+        
         bottomView.addSubview(flashBtn)
         bottomView.addSubview(largeCircleView)
         bottomView.addSubview(smallCircleView)
@@ -438,18 +447,23 @@ open class ZLCustomCamera: UIViewController {
             largeCircleView.addGestureRecognizer(takePictureTap!)
         }
         if cameraConfig.allowRecordVideo {
-            let longGes = UILongPressGestureRecognizer(target: self, action: #selector(longPressAction(_:)))
-            longGes.minimumPressDuration = 0.3
-            longGes.delegate = self
-            largeCircleView.addGestureRecognizer(longGes)
-            takePictureTap?.require(toFail: longGes)
-            recordLongGes = longGes
-            
-            let panGes = UIPanGestureRecognizer(target: self, action: #selector(adjustCameraFocus(_:)))
-            panGes.delegate = self
-            panGes.maximumNumberOfTouches = 1
-            largeCircleView.addGestureRecognizer(panGes)
-            cameraFocusPanGes = panGes
+            if shouldUseTapToRecord {
+                let takeVideoTap = UITapGestureRecognizer(target: self, action: #selector(tapToRecordAction(_:)))
+                largeCircleView.addGestureRecognizer(takeVideoTap)
+            } else {
+                let longGes = UILongPressGestureRecognizer(target: self, action: #selector(longPressAction(_:)))
+                longGes.minimumPressDuration = 0.3
+                longGes.delegate = self
+                largeCircleView.addGestureRecognizer(longGes)
+                takePictureTap?.require(toFail: longGes)
+                recordLongGes = longGes
+
+                let panGes = UIPanGestureRecognizer(target: self, action: #selector(adjustCameraFocus(_:)))
+                panGes.delegate = self
+                panGes.maximumNumberOfTouches = 1
+                largeCircleView.addGestureRecognizer(panGes)
+                cameraFocusPanGes = panGes
+            }
             
             recordVideoPlayerLayer = AVPlayerLayer()
             recordVideoPlayerLayer?.backgroundColor = UIColor.black.cgColor
@@ -564,8 +578,29 @@ open class ZLCustomCamera: UIViewController {
         cameraConfigureFinish = true
         
         sessionQueue.async {
+            self.setInitialZoomFactor(for: camera)
             self.session.startRunning()
         }
+    }
+
+    private func setInitialZoomFactor(for device: AVCaptureDevice) {
+        guard isWideCameraEnabled() else { return }
+        do {
+            try device.lockForConfiguration()
+            device.videoZoomFactor = device.defaultZoomFactor
+            device.unlockForConfiguration()
+        } catch {
+            zl_debugPrint("Failed to set initial zoom factor: \(error.localizedDescription)")
+        }
+    }
+    
+    private func findFirstDevice(ofTypes types: [AVCaptureDevice.DeviceType], in session: AVCaptureDevice.DiscoverySession) -> AVCaptureDevice? {
+        for type in types {
+            if let device = session.devices.first(where: { $0.deviceType == type }) {
+                return device
+            }
+        }
+        return nil
     }
     
     private func refreshSessionPreset(device: AVCaptureDevice) {
@@ -586,8 +621,30 @@ open class ZLCustomCamera: UIViewController {
     }
     
     private func getCamera(position: AVCaptureDevice.Position) -> AVCaptureDevice? {
-        let devices = AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInWideAngleCamera], mediaType: .video, position: position).devices
-        for device in devices {
+        let deviceTypes: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
+        var extendedDeviceTypes: [AVCaptureDevice.DeviceType] = []
+        let allDeviceTypes: [AVCaptureDevice.DeviceType]
+        
+        if #available(iOS 13.0, *), cameraConfig.enableWideCameras {
+            extendedDeviceTypes = [.builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera]
+            allDeviceTypes = deviceTypes + extendedDeviceTypes
+        } else {
+            allDeviceTypes = deviceTypes
+        }
+
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: allDeviceTypes,
+            mediaType: .video,
+            position: position
+        )
+
+        if isWideCameraEnabled() {
+            if let camera = findFirstDevice(ofTypes: extendedDeviceTypes, in: session) {
+                return camera
+            }
+        }
+
+        for device in session.devices {
             if device.position == position {
                 return device
             }
@@ -685,6 +742,10 @@ open class ZLCustomCamera: UIViewController {
         } else if cameraConfig.allowTakePhoto {
             return localLanguageTextValue(.customCameraTakePhotoTips)
         } else if cameraConfig.allowRecordVideo {
+            if shouldUseTapToRecord {
+                return localLanguageTextValue(.customCameraTapToRecordVideoTips)
+            }
+            
             return localLanguageTextValue(.customCameraRecordVideoTips)
         } else {
             return ""
@@ -836,6 +897,7 @@ open class ZLCustomCamera: UIViewController {
                         self.session.addInput(currInput)
                     }
                     
+                    self.setInitialZoomFactor(for: newVideoInput.device)
                     self.session.commitConfiguration()
                 }
             } catch {
@@ -921,6 +983,10 @@ open class ZLCustomCamera: UIViewController {
         }
     }
     
+    @objc private func tapToRecordAction(_ tap: UITapGestureRecognizer) {
+        movieFileOutput?.isRecording == true ? finishRecord() : startRecord(shouldScheduleStop: true)
+    }
+    
     // 调整焦点
     @objc private func adjustFocusPoint(_ tap: UITapGestureRecognizer) {
         guard session.isRunning, !isAdjustingFocusPoint else {
@@ -1000,12 +1066,21 @@ open class ZLCustomCamera: UIViewController {
         pinch.scale = 1
     }
     
+    private func isWideCameraEnabled() -> Bool {
+        if #available(iOS 13.0, *) {
+            return cameraConfig.enableWideCameras
+        } else {
+            return false
+        }
+    }
+    
     private func getMaxZoomFactor() -> CGFloat {
         guard let device = videoInput?.device else {
             return 1
         }
         if #available(iOS 11.0, *) {
-            return min(15, device.maxAvailableVideoZoomFactor)
+            let factor = isWideCameraEnabled() ? device.defaultZoomFactor : 1
+            return min(15 * factor, device.maxAvailableVideoZoomFactor)
         } else {
             return min(15, device.activeFormat.videoMaxZoomFactor)
         }
@@ -1017,7 +1092,13 @@ open class ZLCustomCamera: UIViewController {
         }
         do {
             try device.lockForConfiguration()
-            device.videoZoomFactor = zoomFactor
+            if #available(iOS 11.0, *), isWideCameraEnabled() {
+                let minZoomFactor = device.minAvailableVideoZoomFactor
+                let clampedZoomFactor = max(minZoomFactor, min(zoomFactor, getMaxZoomFactor()))
+                device.videoZoomFactor = clampedZoomFactor
+            } else {
+                device.videoZoomFactor = zoomFactor
+            }
             device.unlockForConfiguration()
         } catch {
             zl_debugPrint("调整焦距失败 \(error.localizedDescription)")
@@ -1089,7 +1170,7 @@ open class ZLCustomCamera: UIViewController {
         }
     }
     
-    private func startRecord() {
+    private func startRecord(shouldScheduleStop: Bool = false) {
         guard let movieFileOutput = movieFileOutput else {
             return
         }
@@ -1114,6 +1195,10 @@ open class ZLCustomCamera: UIViewController {
         } else {
             connection?.videoOrientation = cacheVideoOrientation
         }
+            
+        if let connection = connection, connection.isVideoStabilizationSupported {
+            connection.preferredVideoStabilizationMode = cameraConfig.videoStabilizationMode
+        }
         
         // 解决不同系统版本,因为录制视频编码导致安卓端无法播放的问题
         if #available(iOS 11.0, *),
@@ -1135,6 +1220,14 @@ open class ZLCustomCamera: UIViewController {
         
         let url = URL(fileURLWithPath: ZLVideoManager.getVideoExportFilePath())
         movieFileOutput.startRecording(to: url, recordingDelegate: self)
+        
+        if shouldScheduleStop { // Schedule stop recording after max duration
+            ZLMainAsync(after: Double(cameraConfig.maxRecordDuration)) {
+                if self.movieFileOutput?.isRecording == true {
+                    self.finishRecord()
+                }
+            }
+        }
     }
     
     private func finishRecord() {
@@ -1158,6 +1251,9 @@ open class ZLCustomCamera: UIViewController {
             self.smallCircleView.layer.transform = CATransform3DScale(CATransform3DIdentity, ZLCustomCamera.Layout.smallCircleRecordScale, ZLCustomCamera.Layout.smallCircleRecordScale, 1)
             self.borderLayer.strokeColor = ZLCustomCamera.Layout.cameraBtnRecodingBorderColor.cgColor
             self.borderLayer.lineWidth = ZLCustomCamera.Layout.animateLayerWidth
+            if self.shouldUseTapToRecord {
+                self.smallCircleView.backgroundColor = .red
+            }
         }) { _ in
             self.largeCircleView.layer.addSublayer(self.animateLayer)
             let animation = CABasicAnimation(keyPath: "strokeEnd")
@@ -1171,6 +1267,7 @@ open class ZLCustomCamera: UIViewController {
     
     private func stopRecordAnimation() {
         ZLMainAsync {
+            self.smallCircleView.backgroundColor = ZLCustomCamera.Layout.cameraBtnNormalColor
             self.borderLayer.strokeColor = ZLCustomCamera.Layout.cameraBtnNormalColor.cgColor
             self.borderLayer.lineWidth = ZLCustomCamera.Layout.borderLayerWidth
             self.animateLayer.speed = 1
