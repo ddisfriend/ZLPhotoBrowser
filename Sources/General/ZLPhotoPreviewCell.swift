@@ -679,7 +679,7 @@ class ZLVideoPreviewCell: ZLPreviewBaseCell {
         playerLayer?.frame = playerView.bounds
         playerView.layer.insertSublayer(playerLayer!, at: 0)
         
-        NotificationCenter.default.addObserver(self, selector: #selector(playFinish), name: .AVPlayerItemDidPlayToEndTime, object: player?.currentItem)
+        NotificationCenter.default.addObserver(self, selector: #selector(playFinish), name: AVPlayerItem.didPlayToEndTimeNotification, object: player?.currentItem)
     }
     
     @objc private func playBtnClick() {
@@ -701,18 +701,26 @@ class ZLVideoPreviewCell: ZLPreviewBaseCell {
     }
     
     @objc private func playFinish() {
-        pausePlayer(seekToZero: true)
+        pausePlayer(seekToZero: true, ignorePlayStatus: true)
     }
     
     @objc private func appWillResignActive() {
         pausePlayer(seekToZero: false)
     }
     
-    private func pausePlayer(seekToZero: Bool) {
-        guard isPlaying else { return }
+    /// 暂停播放器
+    /// - Parameters:
+    ///   - seekToZero: 是否seek到0秒
+    ///   - ignorePlayStatus: 是否忽略当前播放器播放状态（
+    /// - Note: 由于`iOS16`后，收到`AVPlayerItem.didPlayToEndTimeNotification`通知后，`player`的`rate`值已经是`0`，所以会被`guard isPlaying else { return }`拦截。所以加了`ignorePlayStatus`参数
+    private func pausePlayer(seekToZero: Bool, ignorePlayStatus: Bool = false) {
+        guard isPlaying || ignorePlayStatus else { return }
         
         player?.pause()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+        
         if seekToZero {
             player?.seek(to: .zero)
         }
@@ -756,6 +764,10 @@ class ZLNetVideoPreviewCell: ZLPreviewBaseCell {
         return false
     }
     
+    private var videoURLString = ""
+    
+    private var videoSizeCache: [String: CGSize] = [:]
+    
     override var currentImage: UIImage? {
         guard let currentItem = player?.currentItem else { return nil }
                 
@@ -793,7 +805,12 @@ class ZLNetVideoPreviewCell: ZLPreviewBaseCell {
     override func layoutSubviews() {
         super.layoutSubviews()
         
-        playerLayer?.frame = playerView.bounds
+        if let size = videoSizeCache[videoURLString] {
+            let frame = calculateVideoFrame(forVideoSize: size)
+            playerView.frame = frame
+            playerLayer?.frame = CGRect(origin: .zero, size: frame.size)
+        }
+        
         playBtn.frame = CGRect(origin: .zero, size: CGSize(width: 50, height: 50))
         playBtn.center = CGPoint(x: bounds.midX, y: bounds.midY)
     }
@@ -832,7 +849,7 @@ class ZLNetVideoPreviewCell: ZLPreviewBaseCell {
     }
     
     @objc private func playFinish() {
-        pausePlayer(seekToZero: true)
+        pausePlayer(seekToZero: true, ignorePlayStatus: true)
     }
     
     @objc private func appWillResignActive() {
@@ -843,11 +860,18 @@ class ZLNetVideoPreviewCell: ZLPreviewBaseCell {
         pausePlayer(seekToZero: false)
     }
     
-    func pausePlayer(seekToZero: Bool) {
-        guard isPlaying else { return }
+    /// 暂停播放器
+    /// - Parameters:
+    ///   - seekToZero: 是否seek到0秒
+    ///   - ignorePlayStatus: 是否忽略当前播放器播放状态（
+    /// - Note: 由于`iOS16`后，收到`AVPlayerItem.didPlayToEndTimeNotification`通知后，`player`的`rate`值已经是`0`，所以会被`guard isPlaying else { return }`拦截。所以加了`ignorePlayStatus`参数
+    private func pausePlayer(seekToZero: Bool, ignorePlayStatus: Bool = false) {
+        guard isPlaying || ignorePlayStatus else { return }
         
         player?.pause()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
         if seekToZero {
             player?.seek(to: .zero)
         }
@@ -857,6 +881,7 @@ class ZLNetVideoPreviewCell: ZLPreviewBaseCell {
     }
     
     func configureCell(videoUrl: URL, httpHeader: [String: Any]?) {
+        videoURLString = videoUrl.absoluteString
         player = nil
         playerLayer?.removeFromSuperlayer()
         playerLayer = nil
@@ -868,31 +893,89 @@ class ZLNetVideoPreviewCell: ZLPreviewBaseCell {
         player = AVPlayer(playerItem: item)
         playerLayer = AVPlayerLayer(player: player)
         playerLayer?.videoGravity = .resizeAspect
-        playerView.frame = calculatePlayerFrame(for: item)
-        playerLayer?.frame = playerView.bounds
+        playerView.frame = bounds
+        playerLayer?.frame = bounds
+        calculatePlayerFrame(for: item) { [weak self] rect in
+            self?.playerView.frame = rect
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self?.playerLayer?.frame = CGRect(origin: .zero, size: rect.size)
+            CATransaction.commit()
+        }
         playerView.layer.insertSublayer(playerLayer!, at: 0)
-        NotificationCenter.default.addObserver(self, selector: #selector(playFinish), name: .AVPlayerItemDidPlayToEndTime, object: player?.currentItem)
+        NotificationCenter.default.addObserver(self, selector: #selector(playFinish), name: AVPlayerItem.didPlayToEndTimeNotification, object: player?.currentItem)
     }
     
-    private func calculatePlayerFrame(for item: AVPlayerItem) -> CGRect {
-        if let videoTrack = item.asset.tracks(withMediaType: .video).first {
-            let size = videoTrack.naturalSize.applying(videoTrack.preferredTransform)
-            let videoWHRatio = size.width / size.height
-            let cellWHRatio = zl.width / zl.height
-            
-            let videoRect: CGRect
-            if videoWHRatio > cellWHRatio {
-                let videoH = zl.width / videoWHRatio
-                videoRect = CGRect(x: 0, y: (zl.height - videoH) / 2, width: zl.width, height: videoH)
-            } else {
-                let videoW = zl.height * videoWHRatio
-                videoRect = CGRect(x: (zl.width - videoW) / 2, y: 0, width: videoW, height: zl.height)
+    private func calculatePlayerFrame(for item: AVPlayerItem, completion: ((CGRect) -> Void)?) {
+        if let size = videoSizeCache[videoURLString] {
+            completion?(calculateVideoFrame(forVideoSize: size))
+            return
+        }
+        
+        guard item.asset is AVURLAsset else {
+            completion?(self.bounds)
+            return
+        }
+        
+        item.asset.loadValuesAsynchronously(forKeys: ["tracks"]) {
+            let status = item.asset.statusOfValue(forKey: "tracks", error: nil)
+            guard status == .loaded else {
+                ZLMainAsync {
+                    completion?(self.bounds)
+                }
+                return
             }
             
-            return videoRect
-        } else {
-            return bounds
+            let videoTracks = item.asset.tracks(withMediaType: .video)
+            
+            if let videoTrack = videoTracks.first {
+                let size = self.correctVideoSize(for: videoTrack)
+                self.videoSizeCache[self.videoURLString] = size
+                
+                ZLMainAsync {
+                    completion?(self.calculateVideoFrame(forVideoSize: size))
+                }
+            } else {
+                ZLMainAsync {
+                    completion?(self.bounds)
+                }
+            }
         }
+    }
+    
+    /// 计算视频实际宽高
+    private func correctVideoSize(for track: AVAssetTrack) -> CGSize {
+        let size = track.naturalSize
+        let transform = track.preferredTransform
+        
+        // 获取视频的旋转角度
+        let angle = atan2(transform.b, transform.a) * (180 / .pi)
+        if angle == 90 || angle == -90 {
+            // 竖屏视频（宽高需要对调）
+            return CGSize(width: abs(size.height), height: abs(size.width))
+        } else {
+            // 横屏视频（宽高不变）
+            return CGSize(width: abs(size.width), height: abs(size.height))
+        }
+    }
+    
+    private func calculateVideoFrame(forVideoSize size: CGSize) -> CGRect {
+        let cellWidth = zl.width
+        let cellHeight = zl.height
+        
+        let videoWHRatio = size.width / size.height
+        let cellWHRatio = cellWidth / cellHeight
+        
+        let videoRect: CGRect
+        if videoWHRatio > cellWHRatio {
+            let videoH = cellWidth / videoWHRatio
+            videoRect = CGRect(x: 0, y: (cellHeight - videoH) / 2, width: cellWidth, height: videoH)
+        } else {
+            let videoW = cellHeight * videoWHRatio
+            videoRect = CGRect(x: (cellWidth - videoW) / 2, y: 0, width: videoW, height: cellHeight)
+        }
+        
+        return videoRect
     }
 }
 

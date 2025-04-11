@@ -236,11 +236,9 @@ class ViewController: UIViewController {
 //            }
         
         /// Using this init method, you can continue editing the selected photo
-        let ac = ZLPhotoPreviewSheet(results: takeSelectedAssetsSwitch.isOn ? selectedResults : nil)
+        let picker = ZLPhotoPicker(results: takeSelectedAssetsSwitch.isOn ? selectedResults : nil)
         
-//        let ac = ZLPhotoPreviewSheet(selectedAssets: takeSelectedAssetsSwitch.isOn ? selectedAssets : nil)
-        
-        ac.selectImageBlock = { [weak self] results, isOriginal in
+        picker.selectImageBlock = { [weak self] results, isOriginal in
             guard let `self` = self else { return }
             self.selectedResults = results
             self.selectedImages = results.map { $0.image }
@@ -255,17 +253,17 @@ class ViewController: UIViewController {
 //            guard !self.selectedAssets.isEmpty else { return }
 //            self.saveAsset(self.selectedAssets[0])
         }
-        ac.cancelBlock = {
+        picker.cancelBlock = {
             debugPrint("cancel select")
         }
-        ac.selectImageRequestErrorBlock = { errorAssets, errorIndexs in
+        picker.selectImageRequestErrorBlock = { errorAssets, errorIndexs in
             debugPrint("fetch error assets: \(errorAssets), error indexs: \(errorIndexs)")
         }
         
         if preview {
-            ac.showPreview(animate: true, sender: self)
+            picker.showPreview(animate: true, sender: self)
         } else {
-            ac.showPhotoLibrary(sender: self)
+            picker.showPhotoLibrary(sender: self)
         }
     }
     
@@ -301,7 +299,7 @@ class ViewController: UIViewController {
         var datas: [Any] = []
         // network image
         datas.append(URL(string: "https://cdn.pixabay.com/photo/2020/10/14/18/35/sign-post-5655110_1280.png")!)
-        datas.append(URL(string: "https://pic.netbian.com/uploads/allimg/190518/174718-1558172838db13.jpg")!)
+        datas.append(URL(string: "https://images.pexels.com/photos/16144420/pexels-photo-16144420/free-photo-of-two-cats-sitting-under-a-tree-and-looking-up.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2")!)
         datas.append(URL(string: "http://5b0988e595225.cdn.sohucs.com/images/20190420/1d1070881fd540db817b2a3bdd967f37.gif")!)
         datas.append(URL(string: "https://cdn.pixabay.com/photo/2019/11/08/11/56/cat-4611189_1280.jpg")!)
         
@@ -453,9 +451,8 @@ extension ViewController: UICollectionViewDataSource, UICollectionViewDelegateFl
     }
     
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        let ac = ZLPhotoPreviewSheet()
-        
-        ac.selectImageBlock = { [weak self] results, isOriginal in
+        let picker = ZLPhotoPicker()
+        picker.selectImageBlock = { [weak self] results, isOriginal in
             guard let `self` = self else { return }
             self.selectedResults = results
             self.selectedImages = results.map { $0.image }
@@ -468,7 +465,7 @@ extension ViewController: UICollectionViewDataSource, UICollectionViewDelegateFl
             debugPrint("isOriginal: \(isOriginal)")
         }
         
-        ac.previewAssets(sender: self, assets: selectedAssets, index: indexPath.row, isOriginal: isOriginal, showBottomViewAndSelectBtn: true)
+        picker.previewAssets(sender: self, assets: selectedAssets, index: indexPath.row, isOriginal: isOriginal, showBottomViewAndSelectBtn: true)
     }
 }
 
